@@ -164,7 +164,7 @@ You will need to set your environment. Add the following to .bashrc, if using ba
     source ~/.bashrc
     
 
-Now set the LRGS Admin Password::
+Now set the LRGS Admin Password:
 
 .. code-block:: bash
 
@@ -174,7 +174,6 @@ Now set the LRGS Admin Password::
         echo "Admin Password is $LRGS_ADMIN_PASSWORD"
         echo "This will not be printed on subsequent runs"
     fi
-    
     cat `<<EOF | editPasswd
         adduser lrgsadmin
         $LRGS_ADMIN_PASSWORD
@@ -184,6 +183,7 @@ Now set the LRGS Admin Password::
         write
         quit
     EOF
+
 
 .. code-block:: bash
     

@@ -1,0 +1,68 @@
+buildscript {
+    repositories {
+        gradlePluginPortal()
+    }
+    dependencies {
+        if (JavaVersion.current() != JavaVersion.VERSION_1_8) {
+            classpath "org.sonarsource.scanner.gradle:sonarqube-gradle-plugin:4.4.1.3373"
+        }
+    }
+}
+
+plugins {
+    id "com.palantir.git-version" version "3.1.0"
+}
+
+if (JavaVersion.current() != JavaVersion.VERSION_1_8) {
+    apply plugin: "org.sonarqube"
+}
+
+
+import org.apache.tools.ant.taskdefs.condition.Os
+
+def gitDetails = versionDetails()
+
+ext.osWin = Os.isFamily(Os.FAMILY_WINDOWS)
+ext.gitCommit = gitDetails.gitHashFull ?: "Not build from git";
+
+def static versionLabel(gitInfo) {
+    def branch = gitInfo.branchName // all branches are snapshots, only tags get released
+    def tag = gitInfo.lastTag
+    // tag is returned as is. Branch may need cleanup
+    return branch == null ? tag : "main.99." + branch.replace("/", "-") + "-SNAPSHOT"
+}
+
+allprojects {
+    group = 'org.opendcs'
+    version = versionLabel(gitDetails)
+}
+
+
+
+if (JavaVersion.current() != JavaVersion.VERSION_1_8) {
+    sonar {
+        properties {
+            property "sonar.projectKey", "opendcs_opendcs"
+            property "sonar.organization", "opendcs"
+            property "sonar.host.url", "https://sonarcloud.io"
+            property "sonar.pullrequest.provider", "GitHub"
+            property "sonar.pullrequest.github.repository", "opendcs/opendcs"
+            property "sonar.coverage.jacoco.xmlReportPaths", "./**/jacoco*.xml"
+            property "sonar.projectVersion", sonarVersion()
+            // TODO: just remove the C files that are no longer used. However, they are still
+            // called in some of the java
+            property "sonar.c.file.suffixes", "-"
+            property "sonar.cpp.file.suffixes", "-"
+            property "sonar.objc.file.suffixes", "-"
+        }
+    }
+}
+
+ext.sonarVersion = {
+    def stdout = new ByteArrayOutputStream()
+    exec {
+        commandLine 'git', 'describe', '--tags', '--abbrev=0', "--always"
+        standardOutput = stdout
+    }
+    return stdout.toString().trim() + "+"
+}
