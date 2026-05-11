@@ -168,7 +168,12 @@ export const Computation: React.FC<ComputationProperties> = ({
   const [localComputation, dispatch] = useReducer(
     ComputationReducer,
     providedComputation,
-  );
+  ); 
+  // For the reducer, we change how it is dispatched and the save action to 
+  // handle the parm list changes more efficiently. This allows us to keep 
+  // the parm list in local state and only update it when necessary, 
+  // rather than having the reducer manage the parm list directly which
+  //  would require more complex logic to handle additions, removals, and updates of parms.
   const [localParms, setLocalParms] = useState<ApiCompParm[]>(() =>
     mergeRequiredParms(
       providedComputation.parmList ?? [],
