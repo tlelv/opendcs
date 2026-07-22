@@ -25,6 +25,7 @@ import javax.sql.DataSource;
 
 import decodes.db.Database;
 import decodes.db.DatabaseException;
+import decodes.util.DecodesSettings;
 import org.opendcs.database.DatabaseService;
 import org.opendcs.database.api.OpenDcsDatabase;
 import org.opendcs.odcsapi.dao.datasource.ConnectionPreparer;
@@ -52,6 +53,12 @@ public final class OpenDcsDatabaseFactory
 		var db = dbCache.computeIfAbsent(organization, o -> newDatabase(dataSource, organization));
 		var decodesDb = db.getLegacyDatabase(Database.class);
 		decodesDb.ifPresent(Database::setDb);
+		// Scope DecodesSettings.instance() to this organization for the remainder of the
+		// request on this thread. Without this, legacy code that calls the static accessor
+		// directly (Site.getPreferredName(), etc.) would race with other organizations'
+		// concurrent requests on other threads. See DecodesSettingsCleanupFilter for the
+		// matching cleanup at end-of-request.
+		db.getSettings(DecodesSettings.class).ifPresent(DecodesSettings::setThreadInstance);
 		return db;
 	}
 

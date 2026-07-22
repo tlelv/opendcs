@@ -48,6 +48,17 @@ public class DecodesSettings implements PropertiesOwner, OpenDcsSettings
     private static final Logger log = OpenDcsLoggerFactory.getLogger();
     private static DecodesSettings _instance = null;
 
+    /**
+     * Per-thread override of the settings returned by {@link #instance()}.
+     * The REST API serves multiple organizations concurrently from the same JVM; each
+     * organization has its own {@code DecodesSettings} (see OpenDcsDatabaseFactory). Legacy
+     * code throughout decodes.db/decodes.sql calls the static {@link #instance()} accessor
+     * directly, so without this override every request on every thread would read whichever
+     * organization's settings happened to be assigned to the shared singleton last, regardless
+     * of which organization's request the thread is actually servicing.
+     */
+    private static final ThreadLocal<DecodesSettings> threadInstance = new ThreadLocal<>();
+
     public enum DbTypes { XML, DECODES_SQL, NWIS, CWMS, HDB, OPENTSDB };
 
     /** Code meaning NO database (for production only) */
@@ -622,9 +633,39 @@ public class DecodesSettings implements PropertiesOwner, OpenDcsSettings
      */
     public static DecodesSettings instance()
     {
+          DecodesSettings threadSettings = threadInstance.get();
+          if (threadSettings != null)
+              return threadSettings;
           if (_instance == null)
               _instance = new DecodesSettings();
           return _instance;
+    }
+
+    /**
+     * Scope subsequent calls to {@link #instance()} on the current thread to the given settings.
+     * Intended for use by request-handling code (e.g. the REST API) that must isolate one
+     * organization's settings from another when servicing concurrent requests on separate
+     * threads. Must be paired with {@link #clearThreadInstance()}, typically in a finally block
+     * or request-completion filter, to avoid leaking the override to whatever request the
+     * thread services next.
+     * @param settings the settings to use for the current thread, or null to clear the override
+     */
+    public static void setThreadInstance(DecodesSettings settings)
+    {
+        if (settings == null)
+        {
+            threadInstance.remove();
+        }
+        else
+        {
+            threadInstance.set(settings);
+        }
+    }
+
+    /** Removes any per-thread settings override set by {@link #setThreadInstance(DecodesSettings)}. */
+    public static void clearThreadInstance()
+    {
+        threadInstance.remove();
     }
 
     /**
