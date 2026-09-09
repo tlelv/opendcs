@@ -1,6 +1,7 @@
 import type React from "react";
 import { FormSelect, type FormSelectProps } from "react-bootstrap";
 import { useUnitListQuery } from "../../queries/units";
+import { compareStrings } from "../../util/sort";
 
 export interface UnitSelectorProperties extends FormSelectProps {
   current?: string;
@@ -36,6 +37,12 @@ const UnitSelect: React.FC<UnitSelectorProperties> = ({
   // it so the default value always has a matching option.
   const hasRaw = Object.values(units).some((u) => u.abbr === RAW_ABBR);
 
+  // The API returns units in database order, which lists every upper-case
+  // abbreviation ahead of the lower-case ones. Sort for the reader instead.
+  const sortedUnits = Object.entries(units).sort(([, a], [, b]) =>
+    compareStrings(a.abbr, b.abbr),
+  );
+
   return (
     <FormSelect
       {...props}
@@ -47,7 +54,7 @@ const UnitSelect: React.FC<UnitSelectorProperties> = ({
       disabled={disabled}
     >
       {!hasRaw && <option value={RAW_ABBR}>{RAW_ABBR}</option>}
-      {Object.entries(units).map(([id, unit]) => (
+      {sortedUnits.map(([id, unit]) => (
         <option key={id} value={unit.abbr}>
           {unit.abbr}
         </option>
