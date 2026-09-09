@@ -766,8 +766,12 @@ public final class ComputationResources extends OpenDcsResource
 		// which series came back empty.
 		results.setTsIds(APIStreamMapper.mapList(
 				reported.isEmpty() ? intended : reported, ApiTimeSeriesIdentifier.class));
+		// Quality flags matter to whoever is reviewing a run -- screening results in particular --
+		// and only the database implementation knows how its flag word is encoded, so it renders
+		// them for display here rather than leaving the caller to guess.
+		TimeSeriesDb tsdb = getLegacyTimeseriesDB();
 		results.setData(distinct.values().stream()
-				.map(cts -> DTOMappers.dataMap(cts, start, end))
+				.map(cts -> DTOMappers.dataMap(cts, start, end, tsdb::flags2display))
 				.toList());
 
 		channel.send(channel.newEvent("Results")

@@ -229,3 +229,77 @@ export const OutputsWithoutValuesAreReported: Story = {
     expect(warning).toHaveTextContent("TESTSITE.Flow.Inst.1Hour.0.compproc");
   },
 };
+
+/**
+ * Screening algorithms express their result as quality flags, and a reviewer deciding whether to
+ * keep a run's output needs to see them next to the value. The flag encoding is database
+ * specific, so the server sends the rendered form and the dialog shows it verbatim.
+ *
+ * Deliberately mixes a flagged and an unflagged sample in one series: an unflagged value must
+ * stay clean, or the marker means nothing.
+ */
+export const RendersQualityFlags: Story = {
+  parameters: {
+    msw: {
+      handlers: {
+        runComputation: http.get(
+          "/odcsapi/runcomputation",
+          () =>
+            new HttpResponse(
+              [
+                "event: computation-status",
+                "data: Computation executed with 0 errors",
+                "",
+                "event: Results",
+                `data: ${JSON.stringify({
+                  tsIds: [{ uniqueString: "TESTSITE.Stage.Inst.1Hour.0.rev", key: 77 }],
+                  startTime: "2026-06-01T00:00:00Z",
+                  endTime: "2026-06-02T00:00:00Z",
+                  data: [
+                    {
+                      tsid: {
+                        uniqueString: "TESTSITE.Stage.Inst.1Hour.0.rev",
+                        key: 77,
+                        storageUnits: "ft",
+                      },
+                      values: [
+                        // Screened and rejected high -- what a screening run flags.
+                        {
+                          sampleTime: "2026-06-01T00:00:00Z",
+                          value: 998.5,
+                          flags: 1073741952,
+                          flagsDisplay: "S(R+)",
+                        },
+                        // Screened, nothing asserted: no marker.
+                        { sampleTime: "2026-06-01T01:00:00Z", value: 12.25, flags: 0 },
+                      ],
+                    },
+                  ],
+                })}`,
+                "",
+              ].join("\n"),
+              { headers: { "Content-Type": "text/event-stream" } },
+            ),
+        ),
+      },
+    },
+  },
+  play: async ({ mount, parameters }) => {
+    await mount();
+    const { i18n } = parameters;
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("computations:run.run") }),
+    );
+
+    const flagged = await screen.findByText("S(R+)", {}, { timeout: 5000 });
+    expect(flagged).toBeInTheDocument();
+    // The raw flag word stays available for anyone who needs the exact bits.
+    expect(flagged).toHaveAttribute("title", "flags: 1073741952");
+
+    // The flagged value and the clean one both render, and only one is marked.
+    const flaggedCell = flagged.closest("td");
+    expect(flaggedCell).toHaveTextContent("998.5");
+    expect(screen.getByText("12.25").closest("td")?.textContent).toBe("12.25");
+  },
+};

@@ -91,9 +91,31 @@ const pivotTimes = (tsData: ApiTimeSeriesData[]): Date[] => {
 };
 
 /** Look up a value for a given series at a given timestamp. */
-const lookupValue = (ts: ApiTimeSeriesData, time: Date): string => {
-  const v = ts.values?.find((v) => v.sampleTime?.getTime() === time.getTime());
-  return v?.value === undefined ? "–" : String(v.value);
+const lookupSample = (ts: ApiTimeSeriesData, time: Date) =>
+  ts.values?.find((v) => v.sampleTime?.getTime() === time.getTime());
+
+/**
+ * One computed value, with its quality flags when the value carries any. The flag encoding is
+ * database specific, so the server sends the rendered form -- screening results in particular
+ * are what a reviewer is looking for before deciding whether to keep a run's output.
+ */
+const ValueCell: React.FC<{ ts: ApiTimeSeriesData; time: Date }> = ({ ts, time }) => {
+  const sample = lookupSample(ts, time);
+  if (sample?.value === undefined) return <>–</>;
+  const flags = sample.flagsDisplay?.trim();
+  return (
+    <>
+      {String(sample.value)}
+      {flags ? (
+        <span
+          className="badge bg-warning text-dark ms-1"
+          title={`flags: ${sample.flags ?? 0}`}
+        >
+          {flags}
+        </span>
+      ) : null}
+    </>
+  );
 };
 
 interface SseCallbacks {
@@ -291,7 +313,7 @@ const ResultsSection: React.FC<ResultsSectionProps> = ({
                         <td className="text-nowrap">{time.toLocaleString()}</td>
                         {run.tsData.map((ts) => (
                           <td key={ts.tsid?.uniqueString ?? ts.tsid?.key}>
-                            {lookupValue(ts, time)}
+                            <ValueCell ts={ts} time={time} />
                           </td>
                         ))}
                       </tr>
