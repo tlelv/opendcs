@@ -1,4 +1,5 @@
 import type React from "react";
+import { useMemo } from "react";
 import { FormSelect, type FormSelectProps } from "react-bootstrap";
 import { useUnitListQuery } from "../../queries/units";
 import { compareStrings } from "../../util/sort";
@@ -23,6 +24,18 @@ const UnitSelect: React.FC<UnitSelectorProperties> = ({
   const { data: units, isSuccess } = useUnitListQuery();
   const selected = current ?? RAW_ABBR;
 
+  // The API returns units in database order, which lists every upper-case
+  // abbreviation ahead of the lower-case ones. Sort for the reader instead.
+  // Memoized above the early return below so the hook order stays stable, and
+  // because this list is ~160 entries re-rendered per row in inline-edit mode.
+  const sortedUnits = useMemo(
+    () =>
+      Object.entries(units ?? {}).sort(([, a], [, b]) =>
+        compareStrings(a.abbr, b.abbr),
+      ),
+    [units],
+  );
+
   if (!isSuccess) {
     // Render a disabled select instead of swapping layout while the units
     // list loads (or never resolves). Shows the selected value (or "raw").
@@ -36,12 +49,6 @@ const UnitSelect: React.FC<UnitSelectorProperties> = ({
   // When the units list is missing "raw" (older APIs / partial data), inject
   // it so the default value always has a matching option.
   const hasRaw = Object.values(units).some((u) => u.abbr === RAW_ABBR);
-
-  // The API returns units in database order, which lists every upper-case
-  // abbreviation ahead of the lower-case ones. Sort for the reader instead.
-  const sortedUnits = Object.entries(units).sort(([, a], [, b]) =>
-    compareStrings(a.abbr, b.abbr),
-  );
 
   return (
     <FormSelect
