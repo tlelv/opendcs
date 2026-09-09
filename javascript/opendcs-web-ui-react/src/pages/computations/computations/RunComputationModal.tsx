@@ -21,7 +21,6 @@ import {
 } from "react-bootstrap-icons";
 import {
   HttpMethod,
-  TimeSeriesMethodsApi,
   type ApiTimeSeriesData,
   type ApiTimeSeriesIdentifier,
 } from "opendcs-api";
@@ -37,9 +36,15 @@ interface CompResults {
   tsIds: TsIdRef[];
   startTime: string;
   endTime: string;
+  /**
+   * The computed values, delivered with the result. A manual run deliberately writes nothing
+   * to the database -- the operator reviews these numbers and decides -- so this is the only
+   * place the run's output exists, and there is nothing to read back from /tsdata.
+   */
+  data?: ApiTimeSeriesData[];
 }
 
-type RunStatus = "idle" | "running" | "fetching" | "success" | "error";
+type RunStatus = "idle" | "running" | "success" | "error";
 
 interface RunRun {
   tsid: ApiTimeSeriesIdentifier;
@@ -336,7 +341,6 @@ export const RunComputationModal: React.FC<Props> = ({
   const { conf, org } = useApi();
   const abortRef = useRef<AbortController | null>(null);
   const logCounterRef = useRef(0);
-  const tsApi = useMemo(() => new TimeSeriesMethodsApi(conf), [conf]);
 
   const [startValue, setStartValue] = useState(defaultStart);
   const [endValue, setEndValue] = useState(defaultEnd);
@@ -408,36 +412,38 @@ export const RunComputationModal: React.FC<Props> = ({
     });
   }, []);
 
-  /** Fetch the computed output time series values after a successful run. */
-  const fetchTsData = useCallback(
-    async (results: CompResults): Promise<ApiTimeSeriesData[]> => {
-      const validIds = results.tsIds.filter((id) => id.key !== undefined && id.key > 0);
-      // An output without a database key cannot be read back. Say so in the trace rather
-      // than returning an empty table with no explanation of why it is empty.
-      if (validIds.length < results.tsIds.length) {
-        appendLog(
-          `${t("computations:run.unresolved_outputs")}: ${results.tsIds
-            .filter((id) => id.key === undefined || id.key <= 0)
-            .map((id) => id.uniqueString ?? t("computations:run.unknown_ts"))
-            .join(", ")}`,
-        );
+  /**
+   * Take the computed values from the run's own result. Nothing is fetched, because a manual
+   * run does not write to the database -- these values exist only in this response.
+   */
+  const readTsData = useCallback(
+    (results: CompResults): ApiTimeSeriesData[] => {
+      // The payload is parsed straight from the event stream, so timestamps arrive as ISO
+      // strings rather than the Date objects the generated client would have produced.
+      const data = (results.data ?? []).map((ts) => ({
+        ...ts,
+        values: ts.values?.map((v) => ({
+          ...v,
+          sampleTime:
+            v.sampleTime === undefined
+              ? undefined
+              : new Date(v.sampleTime as unknown as string),
+        })),
+      }));
+      // Name any output the run described but returned no series for, rather than leaving an
+      // unexplained gap in the table.
+      const returned = new Set(
+        data.map((ts) => ts.tsid?.uniqueString).filter((n): n is string => !!n),
+      );
+      const missing = results.tsIds
+        .map((id) => id.uniqueString)
+        .filter((name): name is string => !!name && !returned.has(name));
+      if (missing.length > 0) {
+        appendLog(`${t("computations:run.unresolved_outputs")}: ${missing.join(", ")}`);
       }
-      if (validIds.length === 0) return [];
-      setStatus("fetching");
-      try {
-        return await Promise.all(
-          validIds.map((id) =>
-            tsApi.getTimeSeriesData(org, id.key!, results.startTime, results.endTime),
-          ),
-        );
-      } catch (fetchErr) {
-        appendLog(
-          `${t("computations:run.fetch_warning")}: ${(fetchErr as Error).message}`,
-        );
-        return [];
-      }
+      return data;
     },
-    [org, tsApi, appendLog, t],
+    [appendLog, t],
   );
 
   /** Call the SSE runcomputation endpoint and return parsed results. */
@@ -491,10 +497,9 @@ export const RunComputationModal: React.FC<Props> = ({
       // null signals an SSE ERROR event — caller should not set success status
       if (hadError) return null;
       if (!results) return { tsid: tsid ?? {}, results, tsData: [] };
-      const tsData = await fetchTsData(results);
-      return { tsid: tsid ?? {}, results, tsData };
+      return { tsid: tsid ?? {}, results, tsData: readTsData(results) };
     },
-    [computationId, conf, streamComputation, fetchTsData],
+    [computationId, conf, streamComputation, readTsData],
   );
 
   /** Sequential loop over selected group TS IDs. Returns true if an SSE ERROR was received. */
@@ -613,7 +618,7 @@ export const RunComputationModal: React.FC<Props> = ({
     );
   }, [groupTsIds]);
 
-  const running = status === "running" || status === "fetching";
+  const running = status === "running";
   const hasAnyResults = runs.length > 0;
   const hasValues = runs.some((r) =>
     r.tsData.some((ts) => (ts.values?.length ?? 0) > 0),
@@ -785,13 +790,6 @@ export const RunComputationModal: React.FC<Props> = ({
             </Alert>
           )}
 
-          {status === "fetching" && (
-            <div className="d-flex align-items-center gap-2 text-muted mb-3">
-              <Spinner size="sm" animation="border" />
-              <span>{t("computations:run.fetching_data")}</span>
-            </div>
-          )}
-
           {hasAnyResults && (
             <div className="mt-2">
               <strong>{t("computations:run.results_title")}</strong>
@@ -805,11 +803,7 @@ export const RunComputationModal: React.FC<Props> = ({
               size="sm"
               animation="border"
               className="me-2"
-              aria-label={
-                status === "fetching"
-                  ? t("computations:run.fetching_data")
-                  : t("computations:run.running")
-              }
+              aria-label={t("computations:run.running")}
             />
           )}
           {!running && (
@@ -822,7 +816,6 @@ export const RunComputationModal: React.FC<Props> = ({
               variant="warning"
               onClick={handleStop}
               aria-label={t("computations:run.stop")}
-              disabled={status === "fetching"}
             >
               <StopFill /> {t("computations:run.stop")}
             </Button>

@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { http, HttpResponse } from "msw";
-import { expect, fn, screen, waitFor } from "storybook/test";
+import { expect, fn, screen, userEvent, waitFor } from "storybook/test";
 import { RunComputationModal } from "./RunComputationModal";
 
 /** A minimal but realistic SSE transcript from /runcomputation. */
@@ -111,12 +111,11 @@ export const TracePopsOut: Story = {
 };
 
 /**
- * Guards the manual-run regression: `/runcomputation` used to report its outputs as
- * parameter-derived identifiers with no database key (-1), so the dialog silently
- * skipped the value fetch and showed an empty result with no explanation. Whatever the
- * server sends, an output that cannot be read back has to be called out in the trace.
+ * A manual run must not write to the database -- the operator reviews the numbers first -- so
+ * the computed values travel inline on the Results event. This asserts they are rendered from
+ * that payload alone, with no /tsdata request to fall back on.
  */
-export const UnresolvableOutputsAreReported: Story = {
+export const RendersValuesFromResultsPayload: Story = {
   parameters: {
     msw: {
       handlers: {
@@ -126,7 +125,76 @@ export const UnresolvableOutputsAreReported: Story = {
             new HttpResponse(
               [
                 "event: computation-status",
-                "data: Running computation with ID: 42",
+                "data: Computed 2 values for 'TESTSITE.Flow.Inst.1Hour.0.rev'",
+                "",
+                "event: Results",
+                `data: ${JSON.stringify({
+                  tsIds: [
+                    { uniqueString: "TESTSITE.Flow.Inst.1Hour.0.rev", key: 1234 },
+                  ],
+                  startTime: "2026-06-01T00:00:00Z",
+                  endTime: "2026-06-02T00:00:00Z",
+                  data: [
+                    {
+                      tsid: {
+                        uniqueString: "TESTSITE.Flow.Inst.1Hour.0.rev",
+                        key: 1234,
+                        storageUnits: "cms",
+                      },
+                      values: [
+                        { sampleTime: "2026-06-01T00:00:00Z", value: 11.5 },
+                        { sampleTime: "2026-06-01T01:00:00Z", value: 12.25 },
+                      ],
+                    },
+                  ],
+                })}`,
+                "",
+              ].join("\n"),
+              { headers: { "Content-Type": "text/event-stream" } },
+            ),
+        ),
+        // Any read-back attempt is a regression: the run wrote nothing, so there is nothing
+        // to read. Fail loudly rather than letting a fallback mask it.
+        tsData: http.get("/odcsapi/tsdata", () => {
+          throw new Error(
+            "RunComputationModal must not fetch /tsdata for a manual run",
+          );
+        }),
+      },
+    },
+  },
+  play: async ({ mount, parameters }) => {
+    await mount();
+    const { i18n } = parameters;
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: i18n.t("computations:run.run") }),
+    );
+
+    expect(await screen.findByText("11.5", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByText("12.25")).toBeInTheDocument();
+    // The column is labelled from the identifier carried alongside the values.
+    expect(
+      screen.getByText(/TESTSITE\.Flow\.Inst\.1Hour\.0\.rev \(cms\)/),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * An output the run described but returned no series for has to be named, rather than leaving
+ * an unexplained gap in the results table.
+ */
+export const OutputsWithoutValuesAreReported: Story = {
+  parameters: {
+    msw: {
+      handlers: {
+        runComputation: http.get(
+          "/odcsapi/runcomputation",
+          () =>
+            new HttpResponse(
+              [
+                "event: computation-status",
+                "data: Computation produced no output time series.",
                 "",
                 "event: Results",
                 `data: ${JSON.stringify({
@@ -135,6 +203,7 @@ export const UnresolvableOutputsAreReported: Story = {
                   ],
                   startTime: "2026-06-01T00:00:00Z",
                   endTime: "2026-06-02T00:00:00Z",
+                  data: [],
                 })}`,
                 "",
               ].join("\n"),
@@ -144,7 +213,7 @@ export const UnresolvableOutputsAreReported: Story = {
       },
     },
   },
-  play: async ({ mount, parameters, userEvent }) => {
+  play: async ({ mount, parameters }) => {
     await mount();
     const { i18n } = parameters;
 
@@ -158,9 +227,5 @@ export const UnresolvableOutputsAreReported: Story = {
       { timeout: 5000 },
     );
     expect(warning).toHaveTextContent("TESTSITE.Flow.Inst.1Hour.0.compproc");
-    // The run still reports the output it was supposed to produce.
-    expect(
-      screen.getByText(/No values written in this time window/),
-    ).toBeInTheDocument();
   },
 };

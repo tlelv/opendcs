@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Objects;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -33,7 +34,6 @@ import decodes.db.DatabaseException;
 import decodes.db.Site;
 import decodes.hdb.HdbTsId;
 import decodes.sql.DbKey;
-import decodes.tsdb.BadTimeSeriesException;
 import decodes.tsdb.CTimeSeries;
 import decodes.tsdb.CompFilter;
 import decodes.tsdb.ComputationExecution;
@@ -74,10 +74,10 @@ import opendcs.dai.CompDependsDAI;
 import opendcs.dai.ComputationDAI;
 import opendcs.dai.SiteDAI;
 import opendcs.dai.TimeSeriesDAI;
-import org.opendcs.database.api.OpenDcsDatabase;
 import org.opendcs.odcsapi.beans.ApiCompResults;
 import org.opendcs.odcsapi.beans.ApiComputation;
 import org.opendcs.odcsapi.beans.ApiComputationRef;
+import org.opendcs.odcsapi.beans.ApiTimeSeriesData;
 import org.opendcs.odcsapi.beans.ApiTimeSeriesIdentifier;
 import org.opendcs.odcsapi.beans.Status;
 import org.opendcs.odcsapi.dao.DbException;
@@ -399,14 +399,14 @@ public final class ComputationResources extends OpenDcsResource
 					channel.sendText(diagnostic);
 				}
 
-				List<TimeSeriesIdentifier> written = List.of();
+				List<CTimeSeries> computed = List.of();
 				try
 				{
 					if (contextMap != null)
 					{
 						MDC.setContextMap(contextMap);
 					}
-					written = executeAndPublishResult(computationId, resolvedComps, startDate, endDate, channel);
+					computed = executeAndPublishResult(computationId, resolvedComps, startDate, endDate, channel);
 				}
 				catch (RuntimeException ex)
 				{
@@ -416,11 +416,7 @@ public final class ComputationResources extends OpenDcsResource
 				{
 					try
 					{
-						// Prefer the identifiers of the time series actually written by the run: those
-						// carry the real database keys the caller needs to read the computed values back.
-						// The parm-derived outputList is only a best-effort description of the intended
-						// outputs (no keys), so fall back to it when nothing was written.
-						processOutput(written.isEmpty() ? outputList : written, channel, startTime, endTime);
+						processOutput(computed, outputList, channel, startTime, endTime);
 					}
 					catch (RuntimeException ex)
 					{
@@ -659,28 +655,24 @@ public final class ComputationResources extends OpenDcsResource
 	 * Runs the resolved computations and persists whatever they produced.
 	 *
 	 * <p>{@link ComputationExecution} only computes: the output time series come back in the
-	 * {@code afterComp} handler and it is the caller's responsibility to write them, exactly as
-	 * {@code ComputationApp} does for the automatic (tasklist driven) path. Without this the run
-	 * would appear to succeed while nothing was ever stored, and the caller would read an empty
-	 * time series back.
+	 * {@code afterComp} handler, and it is up to the caller what to do with them. A manual run
+	 * deliberately does NOT write them -- the operator has to see the numbers and decide before
+	 * anything reaches the database -- so they are collected here and returned to the caller for
+	 * delivery, while the automatic (tasklist driven) path in {@code ComputationApp} saves them.
 	 *
-	 * @return the identifiers of the time series that were successfully saved
+	 * @return the computed output time series, in memory and not persisted
 	 */
-	private List<TimeSeriesIdentifier> executeAndPublishResult(Long computationId, List<DbComputation> comps,
+	private List<CTimeSeries> executeAndPublishResult(Long computationId, List<DbComputation> comps,
 			Date startDate, Date endDate, SseChannel channel)
 	{
 		SseProgressListener listener = new SseProgressListener(channel);
-		// Computations are executed in parallel on the shared pool, so afterComp can be called from
-		// several threads at once. Only collect here -- saving happens on this thread once the batch
-		// has joined, because a TimeSeriesDAI is not safe to share across threads.
+		// Computations run in parallel on the shared pool, so afterComp can be called from several
+		// threads at once.
 		List<CTimeSeries> outputs = new CopyOnWriteArrayList<>();
 		try
 		{
-			OpenDcsDatabase db = createDb();
-			TimeSeriesDb tsDb = db.getLegacyDatabase(TimeSeriesDb.class)
-					.orElseThrow(() -> new IllegalStateException("Time series database is unavailable."));
 			ComputationExecution.CompResults results;
-			try (ComputationExecution execution = new ComputationExecution(db, executors.getComputationExecutor()))
+			try (ComputationExecution execution = new ComputationExecution(createDb(), executors.getComputationExecutor()))
 			{
 				results = execution.execute(comps, new DataCollection(), startDate, endDate, listener, dc ->
 				{
@@ -689,10 +681,10 @@ public final class ComputationResources extends OpenDcsResource
 				});
 			}
 
-			List<TimeSeriesIdentifier> written = saveOutputs(outputs, tsDb, listener);
+			reportOutputs(outputs, listener);
 
 			channel.sendText(String.format("Computation executed with %d errors", results.numErrors()));
-			return written;
+			return outputs;
 		}
 		catch (RuntimeException ex)
 		{
@@ -707,44 +699,20 @@ public final class ComputationResources extends OpenDcsResource
 		}
 	}
 
-	/**
-	 * Writes the computed output time series and reports each one on the progress stream so the
-	 * caller can see what the run actually stored.
-	 */
-	private List<TimeSeriesIdentifier> saveOutputs(List<CTimeSeries> outputs, TimeSeriesDb tsDb,
-			ProgressListener listener)
+	/** Reports what the run computed, so the trace says what is about to be returned. */
+	private void reportOutputs(List<CTimeSeries> outputs, ProgressListener listener)
 	{
 		if(outputs.isEmpty())
 		{
-			listener.onProgress("Computation produced no output time series to save.", Level.INFO, null);
-			return List.of();
+			listener.onProgress("Computation produced no output time series.", Level.INFO, null);
+			return;
 		}
-		// A group computation resolves into one concrete computation per trigger, and several of
-		// those can share an output series -- key the results so the caller gets one column per
-		// output rather than one per resolved computation.
-		Map<DbKey, TimeSeriesIdentifier> written = new LinkedHashMap<>();
-		try (TimeSeriesDAI timeSeriesDAO = tsDb.makeTimeSeriesDAO())
+		for(CTimeSeries cts : outputs)
 		{
-			for(CTimeSeries cts : outputs)
-			{
-				TimeSeriesIdentifier tsid = cts.getTimeSeriesIdentifier();
-				String name = tsid != null ? tsid.getUniqueString() : cts.getNameString();
-				try
-				{
-					timeSeriesDAO.saveTimeSeries(cts);
-					listener.onProgress(String.format("Saved %d values for '%s'", cts.size(), name), Level.INFO, null);
-					if(tsid != null && !DbKey.isNull(tsid.getKey()))
-					{
-						written.putIfAbsent(tsid.getKey(), tsid);
-					}
-				}
-				catch(DbIoException | BadTimeSeriesException ex)
-				{
-					listener.onProgress(String.format("Cannot save time series '%s'", name), Level.WARN, ex);
-				}
-			}
+			TimeSeriesIdentifier tsid = cts.getTimeSeriesIdentifier();
+			listener.onProgress(String.format("Computed %d values for '%s'", cts.size(),
+					tsid != null ? tsid.getUniqueString() : cts.getNameString()), Level.INFO, null);
 		}
-		return new ArrayList<>(written.values());
 	}
 
 	/** Exception message plus its root cause, so a wrapped failure still says what went wrong. */
@@ -763,14 +731,44 @@ public final class ComputationResources extends OpenDcsResource
 		return sb.toString();
 	}
 
-	private void processOutput(List<TimeSeriesIdentifier> outputList, SseChannel channel,
-			Instant startDate, Instant endDate)
+	/**
+	 * Publishes the run's results. The computed values travel inline: a manual run writes nothing,
+	 * so there is nothing for the caller to read back from {@code /tsdata} afterwards.
+	 *
+	 * @param computed the time series the run produced, empty if it produced none
+	 * @param intended parm-derived description of the outputs the computation was meant to write,
+	 *                 used to name them when the run produced nothing
+	 */
+	private void processOutput(List<CTimeSeries> computed, List<TimeSeriesIdentifier> intended,
+			SseChannel channel, Instant startDate, Instant endDate)
 	{
-		List<ApiTimeSeriesIdentifier> ids = APIStreamMapper.mapList(outputList, ApiTimeSeriesIdentifier.class);
+		Date start = Date.from(startDate);
+		Date end = Date.from(endDate);
+		// A group computation resolves into one concrete computation per trigger and several of
+		// those can share an output series, so key by identifier to get one entry per output
+		// rather than one per resolved computation.
+		Map<String, CTimeSeries> distinct = new LinkedHashMap<>();
+		for(CTimeSeries cts : computed)
+		{
+			TimeSeriesIdentifier tsid = cts.getTimeSeriesIdentifier();
+			distinct.putIfAbsent(tsid != null ? tsid.getUniqueString() : cts.getNameString(), cts);
+		}
+
+		List<TimeSeriesIdentifier> reported = distinct.values().stream()
+				.map(CTimeSeries::getTimeSeriesIdentifier)
+				.filter(Objects::nonNull)
+				.toList();
+
 		ApiCompResults results = new ApiCompResults();
 		results.setEndTime(endDate.toString());
 		results.setStartTime(startDate.toString());
-		results.setTsIds(ids);
+		// Name the intended outputs when the run produced nothing, so the caller can still say
+		// which series came back empty.
+		results.setTsIds(APIStreamMapper.mapList(
+				reported.isEmpty() ? intended : reported, ApiTimeSeriesIdentifier.class));
+		results.setData(distinct.values().stream()
+				.map(cts -> DTOMappers.dataMap(cts, start, end))
+				.toList());
 
 		channel.send(channel.newEvent("Results")
 				.mediaType(MediaType.APPLICATION_JSON_TYPE)

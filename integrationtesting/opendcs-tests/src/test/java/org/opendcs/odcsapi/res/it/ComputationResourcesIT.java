@@ -863,9 +863,8 @@ final class ComputationResourcesIT extends BaseApiIT
 						foundCount++;
 						JsonPath jsonPath = JsonPath.from(sseEvent.readData(String.class, MediaType.TEXT_PLAIN_TYPE));
 						assertEquals(expectedTsList.size(), jsonPath.getList("tsIds").size(), "Expected " + expectedTsList.size() + " results");
-						// A run that produced output must report it with the real database key --
-						// parm-derived identifiers carry a null key (-1) and leave the caller unable
-						// to read back anything the run produced.
+						// A manual run writes nothing, so its computed values have to travel inline
+						// on this event -- there is nothing for the caller to read back afterwards.
 						//
 						// Guarded on the run having succeeded because of a SEPARATE, PRE-EXISTING
 						// problem this assertion uncovered: on the OpenDCS/OpenTSDB schema this
@@ -877,6 +876,8 @@ final class ComputationResourcesIT extends BaseApiIT
 						// values the fixture itself imported. Un-guard this once inputs resolve.
 						if (ranClean)
 						{
+							assertFalse(jsonPath.getList("data").isEmpty(),
+									"A successful run must return its computed values inline");
 							List<Number> keys = jsonPath.getList("tsIds.key");
 							keys.forEach(key -> assertTrue(key != null && key.longValue() > 0,
 									"Result tsId has no database key: " + key));
@@ -989,9 +990,8 @@ final class ComputationResourcesIT extends BaseApiIT
 						foundCount++;
 						JsonPath jsonPath = JsonPath.from(sseEvent.readData(String.class, MediaType.TEXT_PLAIN_TYPE));
 						assertEquals(expectedTsList.size(), jsonPath.getList("tsIds").size(), "Expected " + expectedTsList.size() + " results");
-						// A run that produced output must report it with the real database key --
-						// parm-derived identifiers carry a null key (-1) and leave the caller unable
-						// to read back anything the run produced.
+						// A manual run writes nothing, so its computed values have to travel inline
+						// on this event -- there is nothing for the caller to read back afterwards.
 						//
 						// Guarded on the run having succeeded because of a SEPARATE, PRE-EXISTING
 						// problem this assertion uncovered: on the OpenDCS/OpenTSDB schema this
@@ -1003,6 +1003,8 @@ final class ComputationResourcesIT extends BaseApiIT
 						// values the fixture itself imported. Un-guard this once inputs resolve.
 						if (ranClean)
 						{
+							assertFalse(jsonPath.getList("data").isEmpty(),
+									"A successful run must return its computed values inline");
 							List<Number> keys = jsonPath.getList("tsIds.key");
 							keys.forEach(key -> assertTrue(key != null && key.longValue() > 0,
 									"Result tsId has no database key: " + key));
