@@ -155,6 +155,7 @@ public class Screening implements CachableDbObject
 	 */
 	public void add(ScreeningCriteria screeningCriteria)
 	{
+		screeningCriteria.setScreening(this);
 		Calendar c = screeningCriteria.getSeasonStart();
 		if (c == null || criteriaSeasons.size() == 0)
 			criteriaSeasons.add(0, screeningCriteria);
@@ -169,7 +170,6 @@ public class Screening implements CachableDbObject
 			// Fell through, this is after all the existing seasons
 			criteriaSeasons.add(screeningCriteria);
 		}
-		screeningCriteria.setScreening(this);
 	}
 	
 	/**

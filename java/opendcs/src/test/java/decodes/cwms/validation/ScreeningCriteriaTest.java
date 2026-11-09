@@ -39,6 +39,23 @@ final class ScreeningCriteriaTest
 	private static final int REJECTED = CwmsFlags.SCREENED | CwmsFlags.VALIDITY_REJECTED;
 
 	@Test
+	void seasonInsertedBeforeAnExistingSeasonFollowsTheScreeningFlags()
+	{
+		ScreeningCriteria summer = new ScreeningCriteria();
+		summer.setSeasonStart(Calendar.JUNE, 1);
+		ScreeningCriteria winter = absoluteCriteria();
+		winter.setSeasonStart(Calendar.JANUARY, 1);
+
+		Screening screening = new Screening();
+		screening.setRangeActive(false);
+		screening.add(summer);
+		screening.add(winter);
+
+		// 5 is outside the questionable range [10, 90], but range checks are off for this screening.
+		assertEquals(OKAY, check(winter, series(HOURLY), 5.0));
+	}
+
+	@Test
 	void absoluteValueWithinLimitsIsOkay()
 	{
 		assertEquals(OKAY, check(absoluteCriteria(), series(HOURLY), 50.0));
