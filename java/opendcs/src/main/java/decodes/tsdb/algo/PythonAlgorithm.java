@@ -52,7 +52,6 @@ import decodes.comp.RdbRatingReader;
 import decodes.comp.TabRatingReader;
 import decodes.comp.TableBoundsException;
 import decodes.cwms.CwmsFlags;
-import decodes.cwms.CwmsTimeSeriesDb;
 import decodes.cwms.validation.DatchkReader;
 import decodes.cwms.validation.Screening;
 import decodes.cwms.validation.ScreeningCriteria;
@@ -1002,9 +1001,6 @@ public class PythonAlgorithm extends decodes.tsdb.algo.AW_AlgorithmBase
 	{
 		log.debug("screening({})", rolename);
 
-		if (!tsdb.isCwms())
-			return 0;
-
 		NamedVariable nv = _timeSliceVars.findByName(rolename);
 		if (nv == null)
 		{
@@ -1033,7 +1029,12 @@ public class PythonAlgorithm extends decodes.tsdb.algo.AW_AlgorithmBase
 			ScreeningDAI screeningDAO = null;
 			try
 			{
-				screeningDAO = ((CwmsTimeSeriesDb)tsdb).makeScreeningDAO();
+				screeningDAO = tsdb.makeScreeningDAO();
+				if (screeningDAO == null)
+				{
+					log.warn("screening({}) Screenings are not supported by this database implementation.", rolename);
+					return nv.getFlags();
+				}
 				log.trace("Attempting to read screening for TSID '{}'", tsid.getUniqueString());
 				TsidScreeningAssignment tsa = screeningDAO.getScreeningForTS(tsid);
 				screening = tsa != null && tsa.isActive() ? tsa.getScreening() : null;

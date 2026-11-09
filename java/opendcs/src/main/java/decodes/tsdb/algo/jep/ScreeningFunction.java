@@ -33,7 +33,6 @@ import decodes.cwms.validation.Screening;
 import decodes.cwms.validation.ScreeningCriteria;
 import decodes.cwms.validation.dao.ScreeningDAI;
 import decodes.cwms.validation.dao.TsidScreeningAssignment;
-import decodes.cwms.CwmsTimeSeriesDb;
 import decodes.tsdb.DbIoException;
 import decodes.tsdb.ParmRef;
 import decodes.tsdb.TimeSeriesIdentifier;
@@ -79,11 +78,13 @@ public class ScreeningFunction extends PostfixMathCommand
 		if (inputTsid == null)
 			throw new ParseException("No input time-series identifier associated with '" + name + "'!");
 		
-		ScreeningDAI screeningDAO = null;
 		Screening screening = null;
-		try
+		try (ScreeningDAI screeningDAO = ctx.getTsdb().makeScreeningDAO())
 		{
-			screeningDAO = ((CwmsTimeSeriesDb)ctx.getTsdb()).makeScreeningDAO();
+			if (screeningDAO == null)
+			{
+				throw new ParseException("Screenings are not supported by this database implementation.");
+			}
 			TsidScreeningAssignment tsa = screeningDAO.getScreeningForTS(inputTsid);
 			screening = tsa != null && tsa.isActive() ? tsa.getScreening() : null;
 		}
